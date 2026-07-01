@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Chat + RAG - 曾厚桦</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;background:#0b1120;color:#e2e8f0;height:100vh;display:flex}
+/* 侧边栏 */
+.side{width:260px;background:#111827;display:flex;flex-direction:column;flex-shrink:0;border-right:1px solid #1e2d45}
+.side h2{padding:18px 16px;font-size:16px;background:linear-gradient(90deg,#6366f1,#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.side .btn-new{margin:10px 14px;padding:9px;background:#6366f1;color:#fff;border:none;border-radius:7px;cursor:pointer;font-size:13px}
+.side .btn-new:hover{background:#818cf8}
+.hist{overflow-y:auto;padding:6px;max-height:30vh}
+.hist .item{padding:9px 10px;border-radius:6px;cursor:pointer;font-size:12px;color:#8b9fc0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:1px}
+.hist .item:hover{background:rgba(255,255,255,.04);color:#cbd5e1}
+.hist .item.on{background:rgba(99,102,241,.15);color:#818cf8}
+/* KB区 */
+.kb-sec{flex:1;overflow-y:auto;padding:6px;border-top:1px solid #1e2d45}
+.kb-hd{font-size:10px;color:#526380;padding:8px 6px;display:flex;justify-content:space-between;text-transform:uppercase;letter-spacing:1px}
+.kb-hd button{width:20px;height:20px;background:#6366f1;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:14px;line-height:1}
+.kb-item{padding:7px 8px;border-radius:6px;cursor:pointer;font-size:11px;color:#8b9fc0;display:flex;align-items:center;gap:6px;margin-bottom:1px}
+.kb-item:hover{background:rgba(255,255,255,.04)}
+.kb-item.on{background:rgba(34,197,94,.1);color:#22c55e}
+.kb-item .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-item .x{display:none;color:#ef4444;cursor:pointer;font-weight:700}
+.kb-item:hover .x{display:block}
+.side-ft{padding:12px;border-top:1px solid #1e2d45;font-size:11px;color:#526380;text-align:center;margin-top:auto}
+/* 主区 */
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.topbar{padding:10px 18px;background:#111827;border-bottom:1px solid #1e2d45;display:flex;align-items:center;gap:10px;flex-shrink:0}
+.topbar .badge{font-size:11px;padding:4px 10px;border-radius:10px;background:rgba(99,102,241,.15);color:#818cf8}
+.topbar .badge.rag{background:rgba(34,197,94,.12);color:#22c55e}
+.topbar .spc{flex:1}
+.topbar button{font-size:11px;padding:5px 12px;background:transparent;color:#8b9fc0;border:1px solid #1e2d45;border-radius:6px;cursor:pointer}
+.topbar button:hover{border-color:#6366f1;color:#cbd5e1}
+.topbar button.green{border-color:#22c55e;color:#22c55e}
+/* 聊天 */
+.chat{flex:1;overflow-y:auto;padding:18px 22px}
+.chat::-webkit-scrollbar{width:4px}
+.chat::-webkit-scrollbar-thumb{background:#1e2d45;border-radius:2px}
+.welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;gap:8px;opacity:.7}
+.welcome h2{font-size:22px;background:linear-gradient(90deg,#6366f1,#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.welcome p{color:#8b9fc0;font-size:13px;line-height:1.6;max-width:400px}
+.quick-bar{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;justify-content:center;max-width:480px}
+.quick-item{padding:7px 12px;background:#1a2332;border:1px solid #1e2d45;border-radius:16px;color:#8b9fc0;cursor:pointer;font-size:12px}
+.quick-item:hover{border-color:#6366f1;color:#cbd5e1}
+/* 消息 */
+.msg{display:flex;gap:10px;margin-bottom:20px;animation:fadeIn .25s}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.msg .av{width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;font-weight:700}
+.msg.user .av{background:#6366f1;color:#fff}
+.msg.ai .av{background:linear-gradient(135deg,#a855f7,#6366f1);color:#fff}
+.msg .bd{flex:1;min-width:0}
+.msg .hd{font-size:11px;font-weight:700;margin-bottom:3px;display:flex;align-items:center;gap:8px}
+.msg.user .hd{color:#818cf8}
+.msg.ai .hd{color:#a78bfa}
+.msg .hd .tm{font-size:10px;color:#526380;font-weight:400}
+.msg .txt{line-height:1.7;font-size:14px;word-break:break-word;color:#cbd5e1}
+.msg .txt pre{background:#0b1120;padding:12px 14px;border-radius:7px;overflow-x:auto;margin:8px 0;border:1px solid #1e2d45;font-size:12px;line-height:1.5}
+.msg .txt code{font-family:'JetBrains Mono','Consolas',monospace;font-size:12px;background:rgba(255,255,255,.05);padding:1px 5px;border-radius:3px}
+.msg .txt pre code{background:none;padding:0}
+.msg .txt table{border-collapse:collapse;margin:8px 0;font-size:13px}
+.msg .txt td,.msg .txt th{border:1px solid #1e2d45;padding:5px 10px;text-align:left}
+.msg .txt th{background:rgba(99,102,241,.1)}
+.msg .txt blockquote{border-left:3px solid #6366f1;padding:3px 12px;margin:6px 0;color:#8b9fc0}
+.msg .txt ul,.msg .txt ol{padding-left:18px;margin:5px 0}
+.cursor::after{content:'|';animation:blink .7s infinite;color:#818cf8}
+@keyframes blink{0%,50%{opacity:1}51%,100%{opacity:0}}
+/* 输入 */
+.inp-box{padding:12px 18px 16px;border-top:1px solid #1e2d45;background:#111827;flex-shrink:0}
+.rag-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;min-height:20px}
+.tgl{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
+.tgl input{display:none}
+.tgl .track{width:36px;height:19px;border-radius:10px;background:#1e2d45;position:relative;transition:.2s}
+.tgl .track::after{content:'';position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:#fff;transition:.2s}
+.tgl input:checked+.track{background:#22c55e}
+.tgl input:checked+.track::after{transform:translateX(17px)}
+.tgl span{font-size:11px;color:#8b9fc0}
+.kb-chips{display:flex;gap:5px;flex-wrap:wrap}
+.kb-chip{padding:2px 9px;border-radius:9px;font-size:10px;cursor:pointer;border:1px solid #1e2d45;color:#8b9fc0}
+.kb-chip.on{background:rgba(34,197,94,.12);border-color:#22c55e;color:#22c55e}
+.inp-row{display:flex;gap:8px;background:#0b1120;border:1px solid #1e2d45;border-radius:11px;padding:5px 5px 5px 14px;align-items:flex-end}
+.inp-row:focus-within{border-color:#6366f1}
+.inp-row textarea{flex:1;background:none;border:none;outline:none;color:#cbd5e1;font-size:14px;line-height:1.5;resize:none;max-height:130px;font-family:inherit;padding:4px 0}
+.inp-row textarea::placeholder{color:#526380}
+.inp-row .sbtn{width:36px;height:36px;border-radius:8px;background:#6366f1;border:none;color:#fff;font-size:16px;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.inp-row .sbtn:hover{background:#818cf8}
+.inp-row .sbtn.stop{background:#ef4444}
+.hint{font-size:10px;color:#526380;text-align:center;margin-top:7px}
+/* 弹窗 */
+.modal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.65);z-index:9999;display:none;align-items:center;justify-content:center}
+.modal.show{display:flex}
+.modal .bx{background:#1a2332;border:1px solid #1e2d45;border-radius:12px;padding:22px;width:92%;max-width:480px;max-height:80vh;overflow-y:auto}
+.modal .bx h3{font-size:16px;margin-bottom:4px}
+.modal .bx .desc{font-size:12px;color:#8b9fc0;margin-bottom:10px;line-height:1.5}
+.modal .bx input,.modal .bx textarea{width:100%;padding:9px 11px;background:#0b1120;border:1px solid #1e2d45;border-radius:7px;color:#cbd5e1;font-size:13px;margin-bottom:6px;outline:none;font-family:inherit}
+.modal .bx input:focus,.modal .bx textarea:focus{border-color:#6366f1}
+.modal .bx .btns{display:flex;gap:6px;justify-content:flex-end;margin-top:10px}
+.modal .bx .btns button{padding:7px 14px;border-radius:6px;font-size:12px;cursor:pointer;border:none;font-weight:600}
+.btn-p{background:#6366f1;color:#fff}.btn-p:hover{background:#818cf8}
+.btn-g{background:transparent;color:#8b9fc0;border:1px solid #1e2d45!important}
+.btn-d{background:transparent;color:#ef4444;border:1px solid #ef4444!important}
+.btn-s{background:#22c55e;color:#fff}
+/* 文档 */
+.d-row{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:6px;border:1px solid #1e2d45;margin-bottom:3px;font-size:12px}
+.d-row .di{flex:1;min-width:0}
+.d-row .di .dn{color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.d-row .di .dm{color:#526380;font-size:10px}
+.d-row button{padding:2px 7px;border-radius:4px;cursor:pointer;font-size:10px;border:1px solid #6366f1;color:#6366f1;background:transparent;margin-left:4px}
+.d-row button.del{border-color:#ef4444;color:#ef4444}
+.up-zone{border:2px dashed #1e2d45;border-radius:9px;padding:16px;text-align:center;cursor:pointer;margin-bottom:8px}
+.up-zone:hover{border-color:#6366f1}
+.up-zone .u-ico{font-size:20px;margin-bottom:2px}
+.up-zone .u-txt{font-size:12px;color:#8b9fc0}
+.up-zone .u-tip{font-size:10px;color:#526380;margin-top:2px}
+.content-box{background:#0b1120;border:1px solid #1e2d45;border-radius:7px;padding:10px;max-height:160px;overflow-y:auto;font-size:12px;line-height:1.7;white-space:pre-wrap;color:#8b9fc0;margin-bottom:10px}
+.chunk-item{background:#0b1120;border:1px solid #1e2d45;border-radius:6px;padding:7px 9px;margin-bottom:3px;font-size:11px;line-height:1.5}
+.chunk-item .ci{color:#6366f1;font-size:10px;margin-bottom:2px;font-weight:600}
+.chunk-item .ct{color:#8b9fc0;white-space:pre-wrap}
+</style>
+</head>
+<body>
+
+<!-- 侧边栏 -->
+<aside class="side">
+  <h2>AI Chat + RAG</h2>
+  <button class="btn-new" onclick="newChat()">+ 新对话</button>
+  <div class="hist" id="histList"></div>
+  <div class="kb-sec">
+    <div class="kb-hd"><span>知识库</span><button onclick="showKBMgr()">+</button></div>
+    <div id="kbList"><div style="font-size:10px;color:#526380;text-align:center;padding:10px">暂无知识库</div></div>
+  </div>
+  <div class="side-ft">曾 厚 桦</div>
+</aside>
+
+<!-- 主区 -->
+<div class="main">
+  <div class="topbar">
+    <span class="badge" id="badge">deepseek-chat</span>
+    <span class="spc"></span>
+    <button id="keyBtn" onclick="showApiModal()">设置 API Key</button>
+    <button style="color:#ef4444;border-color:#ef4444" onclick="clearChat()">清空</button>
+  </div>
+
+  <div class="chat" id="chatBox">
+    <div class="welcome" id="welcome">
+      <div style="font-size:42px">⚡</div>
+      <h2>DeepSeek AI Chat</h2>
+      <p>流式对话 · RAG 知识库检索 · Markdown 渲染</p>
+      <div class="quick-bar">
+        <span class="quick-item" onclick="quickSend(this)">Python有哪些Web框架？</span>
+        <span class="quick-item" onclick="quickSend(this)">快速排序的复杂度？</span>
+        <span class="quick-item" onclick="quickSend(this)">什么是Transformer？</span>
+        <span class="quick-item" onclick="quickSend(this)">MySQL和MongoDB区别？</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="inp-box">
+    <div class="rag-row">
+      <label class="tgl">
+        <input type="checkbox" id="ragToggle" onchange="onRagToggle()">
+        <div class="track"></div>
+        <span>RAG 知识库检索</span>
+      </label>
+      <div class="kb-chips" id="kbTags"></div>
+    </div>
+    <div class="inp-row">
+      <textarea id="userInput" placeholder="输入问题，Enter 发送，Shift+Enter 换行" rows="1"
+        onkeydown="return onKeyDown(event)" oninput="autoGrow(this)"></textarea>
+      <button class="sbtn" id="sendBtn" onclick="onSendClick()">▶</button>
+    </div>
+    <div class="hint" id="hint">Enter 发送 · Shift+Enter 换行</div>
+  </div>
+</div>
+
+<!-- API Key 弹窗 -->
+<div class="modal" id="apiModal"><div class="bx">
+  <h3>DeepSeek API Key</h3>
+  <div class="desc">在 platform.deepseek.com 获取，仅存浏览器本地。</div>
+  <input type="password" id="apiKeyInput" placeholder="sk-..." onfocus="this.type='text'" onblur="this.type='password'">
+  <div class="btns">
+    <button class="btn-d" onclick="delKey()">删除</button>
+    <button class="btn-g" onclick="closeModal('apiModal')">取消</button>
+    <button class="btn-p" onclick="saveKey()">保存</button>
+  </div>
+</div></div>
+
+<!-- KB弹窗 -->
+<div class="modal" id="kbModal"><div class="bx" id="kbBox"></div></div>
+
+<script>
+// ============================================================
+// 全局状态
+// ============================================================
+var API     = 'https://api.deepseek.com/chat/completions';
+var BACKEND = 'http://localhost:5000';
+var MODEL   = 'deepseek-chat';
+
+var msgs     = [];        // 当前对话消息
+var convos   = [];        // [{title, msgs}]
+var curConv  = 0;         // 当前对话索引
+var ac       = null;      // AbortController（非 null = 正在生成）
+var ragOn    = false;     // RAG开关
+var selKBs   = [];        // 选中的知识库ID
+var kbCache  = [];        // 知识库列表缓存
+
+// ============================================================
+// 工具
+// ============================================================
+function esc(s) {
+  var d = document.createElement('div');
+  d.textContent = (s == null) ? '' : String(s);
+  return d.innerHTML;
+}
+function timeStr() {
+  var d = new Date();
+  return ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2);
+}
+function $(id) { return document.getElementById(id); }
+function showM(id) { $(id).classList.add('show'); }
+function hideM(id) { $(id).classList.remove('show'); }
+
+// Markdown
+function md(s) {
+  if (!s) return '';
+  s = esc(s);
+  // 代码块
+  s = s.replace(/```(\w*)\n([\s\S]*?)```/g, function(_,lang,code){
+    return '<pre><code>' + code.replace(/\n$/,'') + '</code></pre>';
+  });
+  // 行内代码
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // 表格
+  s = s.replace(/\|(.+)\|\n\|[-| :]+\|\n((?:\|.+\|\n?)*)/gm, function(_,head,body){
+    var h = '<tr>'+head.split('|').filter(function(x){return x.trim()}).map(function(x){return'<th>'+x.trim()+'</th>'}).join('')+'</tr>';
+    var b = body.trim().split('\n').map(function(rw){
+      return'<tr>'+rw.split('|').filter(function(x){return x.trim()}).map(function(x){return'<td>'+x.trim()+'</td>'}).join('')+'</tr>';
+    }).join('');
+    return'<table>'+h+b+'</table>';
+  });
+  // 标题
+  s = s.replace(/^### (.+)$/gm,'<h4 style="margin:8px 0 3px">$1</h4>');
+  s = s.replace(/^## (.+)$/gm,'<h3 style="margin:10px 0 5px">$1</h3>');
+  s = s.replace(/^# (.+)$/gm,'<h2 style="margin:12px 0 6px">$1</h2>');
+  // 粗体斜体
+  s = s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  s = s.replace(/\*(.+?)\*/g,'<em>$1</em>');
+  // 引用
+  s = s.replace(/^&gt; (.+)$/gm,'<blockquote>$1</blockquote>');
+  // 水平线
+  s = s.replace(/^---$/gm,'<hr>');
+  // 列表
+  s = s.replace(/^- (.+)$/gm,'<li>$1</li>');
+  s = s.replace(/^(\d+)\. (.+)$/gm,'<li>$1. $2</li>');
+  // 段落
+  s = s.replace(/\n\n/g,'</p><p>');
+  s = s.replace(/\n/g,'<br>');
+  return '<p>'+s+'</p>';
+}
+
+// ============================================================
+// 持久化
+// ============================================================
+function loadState() {
+  try {
+    var d = JSON.parse(localStorage.getItem('chat_v3'));
+    if (d) { msgs = d.msgs||[]; convos = d.convos||[]; curConv = d.curConv||0; }
+  } catch(e) {}
+  if (!convos.length) { convos = [{title:'新对话', msgs:[]}]; curConv = 0; msgs = []; }
+  if (!convos[curConv]) { curConv = 0; msgs = convos[0] ? convos[0].msgs : []; }
+}
+function saveState() {
+  try {
+    convos[curConv].msgs = msgs;
+    localStorage.setItem('chat_v3', JSON.stringify({msgs:msgs, convos:convos, curConv:curConv}));
+  } catch(e) {}
+}
+loadState();
+
+// ============================================================
+// 渲染
+// ============================================================
+function renderChat() {
+  var box = $('chatBox');
+  var wel = $('welcome');
+  if (!box || !wel) return;
+
+  if (!msgs.length) {
+    box.innerHTML = '';
+    box.appendChild(wel);
+    wel.style.display = '';
+    return;
+  }
+  wel.style.display = 'none';
+
+  var h = '';
+  for (var i = 0; i < msgs.length; i++) {
+    var m = msgs[i];
+    var isUser = (m.role === 'user');
+    var cls = m._streaming ? ' txt cursor' : ' txt';
+    var tag  = m._rag ? ' [RAG]' : '';
+    var cont = isUser ? esc(m.content) : md(m.content);
+    var tm   = m._time || '';
+    h += '<div class="msg '+(isUser?'user':'ai')+'">'
+      + '<div class="av">'+(isUser?'我':'AI')+'</div>'
+      + '<div class="bd">'
+      + '<div class="hd">'+(isUser?'You':'DeepSeek'+tag)
+      + '<span class="tm">'+tm+'</span></div>'
+      + '<div class="'+cls+'">'+cont+'</div>'
+      + '</div></div>';
+  }
+  box.innerHTML = h;
+  box.scrollTop = box.scrollHeight;
+}
+
+function updateBubble(content, streaming) {
+  var last = document.querySelector('.msg:last-child .txt');
+  if (last) {
+    last.innerHTML = md(content);
+    if (streaming) last.classList.add('cursor');
+    else last.classList.remove('cursor');
+  }
+  var box = $('chatBox');
+  if (box) {
+    var d = box.scrollHeight - box.scrollTop - box.clientHeight;
+    if (d < 120) box.scrollTop = box.scrollHeight;
+  }
+}
+
+function renderHist() {
+  var el = $('histList');
+  if (!el) return;
+  var h = '';
+  for (var i = 0; i < convos.length; i++) {
+    h += '<div class="item'+(i===curConv?' on':'')+'" onclick="switchChat('+i+')">'
+      + esc(convos[i].title||'新对话')+'</div>';
+  }
+  el.innerHTML = h;
+}
+
+function renderAll() {
+  try { renderChat(); } catch(e) {}
+  try { renderHist(); } catch(e) {}
+  try { updateKeyBtn(); } catch(e) {}
+  try { renderKBList(); } catch(e) {}
+  try { renderKBTags(); } catch(e) {}
+  try { updateBadge(); } catch(e) {}
+  try { updateHint(); } catch(e) {}
+}
+
+// ============================================================
+// 对话操作
+// ============================================================
+function switchChat(i) {
+  convos[curConv].msgs = msgs;
+  curConv = i;
+  msgs = convos[i] ? (convos[i].msgs||[]) : [];
+  saveState();
+  renderAll();
+  $('userInput').focus();
+}
+function newChat() {
+  convos[curConv].msgs = msgs;
+  convos.unshift({title:'新对话', msgs:[]});
+  curConv = 0;
+  msgs = [];
+  saveState();
+  renderAll();
+  $('userInput').focus();
+}
+function clearChat() {
+  if (confirm('清空当前对话？')) { msgs = []; saveState(); renderAll(); }
+}
+
+// ============================================================
+// API Key
+// ============================================================
+function getKey() { return localStorage.getItem('dk_key')||''; }
+function updateKeyBtn() {
+  var b = $('keyBtn');
+  if (!b) return;
+  var has = !!getKey();
+  b.textContent = has ? 'API Key 已设置' : '设置 API Key';
+  if (has) b.classList.add('green'); else b.classList.remove('green');
+}
+function showApiModal() { $('apiKeyInput').value = getKey(); showM('apiModal'); }
+function saveKey() {
+  var k = $('apiKeyInput').value.trim();
+  if (!k) return alert('请输入 API Key');
+  if (k.indexOf('sk-') !== 0) return alert('API Key 应以 sk- 开头');
+  localStorage.setItem('dk_key', k);
+  hideM('apiModal');
+  updateKeyBtn();
+}
+function delKey() {
+  if (confirm('删除 API Key？')) { localStorage.removeItem('dk_key'); hideM('apiModal'); updateKeyBtn(); }
+}
+
+// ============================================================
+// 知识库
+// ============================================================
+async function loadKBs() {
+  try {
+    var r = await fetch(BACKEND+'/api/kbs');
+    if (r.ok) { kbCache = await r.json(); renderKBList(); renderKBTags(); }
+  } catch(e) {}
+}
+function renderKBList() {
+  var el = $('kbList');
+  if (!el) return;
+  if (!kbCache.length) { el.innerHTML = '<div style="font-size:10px;color:#526380;text-align:center;padding:8px">暂无知识库<br>点击 + 创建</div>'; return; }
+  var h = '';
+  for (var i = 0; i < kbCache.length; i++) {
+    var kb = kbCache[i];
+    var on = (selKBs.indexOf(kb.id) >= 0);
+    h += '<div class="kb-item'+(on?' on':'')+'" onclick="toggleKB('+kb.id+')">'
+      + '<span class="nm">'+esc(kb.name)+'</span>'
+      + '<span class="x" onclick="event.stopPropagation();delKB('+kb.id+')">x</span></div>';
+  }
+  el.innerHTML = h;
+}
+function renderKBTags() {
+  var el = $('kbTags');
+  if (!el) return;
+  if (!ragOn) { el.innerHTML = ''; return; }
+  if (!kbCache.length) { el.innerHTML = '<span class="kb-chip" style="border-style:dashed;color:#526380">请先创建知识库</span>'; return; }
+  var h = '';
+  for (var i = 0; i < kbCache.length; i++) {
+    var kb = kbCache[i];
+    var on = (selKBs.indexOf(kb.id) >= 0);
+    h += '<span class="kb-chip'+(on?' on':'')+'" onclick="toggleKB('+kb.id+')">'+esc(kb.name)+'</span>';
+  }
+  el.innerHTML = h;
+}
+function toggleKB(id) {
+  var i = selKBs.indexOf(id);
+  if (i >= 0) selKBs.splice(i,1); else selKBs.push(id);
+  renderKBList(); renderKBTags(); updateHint();
+}
+function onRagToggle() {
+  ragOn = $('ragToggle').checked;
+  if (ragOn && !kbCache.length) loadKBs();
+  renderKBTags(); updateHint(); updateBadge();
+}
+function updateBadge() {
+  var b = $('badge');
+  if (!b) return;
+  b.textContent = ragOn ? 'deepseek-chat + RAG' : 'deepseek-chat';
+  if (ragOn) b.classList.add('rag'); else b.classList.remove('rag');
+}
+function updateHint() {
+  var h = $('hint');
+  if (!h) return;
+  if (ragOn && selKBs.length) {
+    var ns = selKBs.map(function(id){var k=kbCache.find(function(x){return x.id===id});return k?k.name:'?';}).join(', ');
+    h.innerHTML = 'RAG·检索: <b>'+esc(ns)+'</b>';
+  } else if (ragOn) {
+    h.innerHTML = 'RAG 模式 · 点击上方标签选择知识库';
+  } else {
+    h.innerHTML = 'Enter 发送 · Shift+Enter 换行';
+  }
+}
+
+// ====== KB弹窗 ======
+function showKBMgr() { renderKBBox(); showM('kbModal'); }
+
+async function renderKBBox(kbId) {
+  try { var r = await fetch(BACKEND+'/api/kbs'); if (r.ok) kbCache = await r.json(); } catch(e) {}
+  var box = $('kbBox');
+  if (!box) return;
+
+  if (kbId) {
+    var kb = kbCache.find(function(x){return x.id===kbId});
+    if (!kb) { hideM('kbModal'); return; }
+    var docs = [];
+    try { var r2 = await fetch(BACKEND+'/api/kbs/'+kbId+'/docs'); if (r2.ok) docs = await r2.json(); } catch(e) {}
+    var dh = '';
+    if (!docs.length) {
+      dh = '<div style="color:#526380;font-size:11px;text-align:center;padding:8px">暂无文档</div>';
+    } else {
+      for (var i = 0; i < docs.length; i++) {
+        var d = docs[i];
+        dh += '<div class="d-row">'
+          + '<span>'+({txt:'T',md:'M',docx:'D'})[d.file_type]+'</span>'
+          + '<span class="di"><div class="dn">'+esc(d.original_filename)+'</div>'
+          + '<div class="dm">'+d.chunk_count+' 块 · '+(d.file_size/1024).toFixed(1)+' KB</div></span>'
+          + '<button onclick="viewDoc('+kbId+','+d.id+')">查看</button>'
+          + '<button class="del" onclick="delDoc('+kbId+','+d.id+')">删除</button></div>';
+      }
+    }
+    box.innerHTML = '<h3>'+esc(kb.name)+'</h3>'
+      + '<div class="desc">'+esc(kb.description||'')+' · '+kb.doc_count+' 文档 · '+(kb.chunk_count||0)+' 块</div>'
+      + '<div class="up-zone" id="upZone" onclick="$(\'fileInput\').click()">'
+      + '<div class="u-ico">+</div><div class="u-txt">点击上传或拖拽文件</div>'
+      + '<div class="u-tip">支持 .txt .md .docx（最大 16MB）</div></div>'
+      + '<input type="file" id="fileInput" style="display:none" accept=".txt,.md,.docx" multiple onchange="upDocs('+kbId+')">'
+      + dh
+      + '<div class="btns">'
+      + '<button class="btn-d" onclick="delKB('+kbId+');hideM(\'kbModal\')">删除知识库</button>'
+      + '<button class="btn-g" onclick="renderKBBox()">返回</button>'
+      + '<button class="btn-p" onclick="hideM(\'kbModal\');loadKBs();renderKBList();renderKBTags()">完成</button></div>';
+    var uz = $('upZone');
+    if (uz) {
+      uz.addEventListener('dragover', function(e){e.preventDefault();uz.style.borderColor='#22c55e'});
+      uz.addEventListener('dragleave', function(){uz.style.borderColor='#1e2d45'});
+      uz.addEventListener('drop', function(e){e.preventDefault();uz.style.borderColor='#1e2d45';doUpFiles(kbId,e.dataTransfer.files)});
+    }
+  } else {
+    var lh = '';
+    if (!kbCache.length) {
+      lh = '<div style="color:#526380;font-size:11px;text-align:center;padding:8px">暂无知识库</div>';
+    } else {
+      for (var j = 0; j < kbCache.length; j++) {
+        var b = kbCache[j];
+        lh += '<div class="d-row" style="cursor:pointer" onclick="renderKBBox('+b.id+')">'
+          + '<span>F</span><span class="di"><div class="dn">'+esc(b.name)+'</div>'
+          + '<div class="dm">'+esc(b.description||'')+' · '+b.doc_count+' 文档</div></span>'
+          + '<span style="color:#526380">&gt;</span></div>';
+      }
+    }
+    box.innerHTML = '<h3>知识库管理</h3><div class="desc">最多 5 个知识库</div>'
+      + '<button class="btn-s" onclick="newKBForm()" style="margin-bottom:8px">+ 新建知识库</button>'
+      + lh + '<div class="btns"><button class="btn-g" onclick="hideM(\'kbModal\')">关闭</button></div>';
+  }
+}
+
+function newKBForm() {
+  $('kbBox').innerHTML = '<h3>新建知识库</h3>'
+    + '<input type="text" id="nkName" placeholder="名称（必填）">'
+    + '<textarea id="nkDesc" placeholder="描述（可选）" rows="2"></textarea>'
+    + '<div class="btns"><button class="btn-g" onclick="renderKBBox()">取消</button>'
+    + '<button class="btn-p" onclick="createKB()">创建</button></div>';
+}
+
+async function createKB() {
+  var n = $('nkName').value.trim();
+  if (!n) return alert('请输入名称');
+  var d = $('nkDesc').value.trim();
+  try {
+    var r = await fetch(BACKEND+'/api/kbs', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name:n, description:d})
+    });
+    if (r.ok) { await loadKBs(); renderKBBox(); renderKBList(); renderKBTags(); }
+    else { var e = await r.json(); alert(e.error||'创建失败'); }
+  } catch(x) { alert('后端连接失败'); }
+}
+
+async function delKB(id) {
+  if (!confirm('确定删除此知识库？')) return;
+  try {
+    await fetch(BACKEND+'/api/kbs/'+id, {method:'DELETE'});
+    selKBs = selKBs.filter(function(x){return x!==id});
+    await loadKBs(); renderKBList(); renderKBTags(); renderKBBox();
+  } catch(x) {}
+}
+
+function upDocs(kbId) {
+  var f = $('fileInput').files;
+  if (f && f.length) doUpFiles(kbId, f);
+}
+
+async function doUpFiles(kbId, files) {
+  var fd = new FormData();
+  for (var i = 0; i < files.length; i++) fd.append('files', files[i]);
+  try {
+    var r = await fetch(BACKEND+'/api/kbs/'+kbId+'/docs', {method:'POST', body:fd});
+    var results = await r.json();
+    var ms = [];
+    for (var j = 0; j < results.length; j++) {
+      var x = results[j];
+      ms.push(x.error ? ('FAIL: '+x.filename) : ('OK: '+x.filename+' ('+x.chunk_count+' 块)'));
+    }
+    alert(ms.join('\n'));
+    renderKBBox(kbId); await loadKBs(); renderKBList();
+  } catch(x) { alert('上传失败'); }
+}
+
+async function delDoc(kbId, docId) {
+  if (!confirm('确定删除？')) return;
+  try {
+    await fetch(BACKEND+'/api/kbs/'+kbId+'/docs/'+docId, {method:'DELETE'});
+    renderKBBox(kbId); await loadKBs(); renderKBList(); renderKBTags();
+  } catch(x) {}
+}
+
+async function viewDoc(kbId, docId) {
+  try {
+    var r = await fetch(BACKEND+'/api/kbs/'+kbId+'/docs/'+docId+'/content');
+    if (!r.ok) { alert('获取失败'); return; }
+    var d = await r.json();
+    var ch = '';
+    for (var i = 0; i < d.chunks.length; i++) {
+      var c = d.chunks[i];
+      ch += '<div class="chunk-item"><div class="ci">第'+(i+1)+'块 · '+c.char_count+'字</div>'
+        + '<div class="ct">'+esc(c.text)+'</div></div>';
+    }
+    $('kbBox').innerHTML = '<h3>'+esc(d.filename)+'</h3>'
+      + '<div class="desc">'+d.file_type+' · '+(d.file_size/1024).toFixed(1)+' KB · '+d.chunk_count+' 块</div>'
+      + '<div style="font-size:12px;font-weight:600;margin-bottom:4px">完整文档:</div>'
+      + '<div class="content-box">'+esc(d.full_text)+'</div>'
+      + '<div style="font-size:12px;font-weight:600;margin-bottom:4px">向量切块:</div>'
+      + '<div style="max-height:280px;overflow-y:auto">'+ch+'</div>'
+      + '<div class="btns"><button class="btn-g" onclick="renderKBBox()">返回</button></div>';
+    showM('kbModal');
+  } catch(x) {}
+}
+
+// ============================================================
+// 核心：发送消息
+// ============================================================
+function isBusy() {
+  return ac !== null;
+}
+
+function setBusy(b) {
+  var btn = $('sendBtn');
+  if (!btn) return;
+  if (b) {
+    btn.textContent = '■';
+    btn.classList.add('stop');
+  } else {
+    btn.textContent = '▶';
+    btn.classList.remove('stop');
+    ac = null;
+  }
+}
+
+function onSendClick() {
+  if (ac) {
+    // 正在生成 → 停止
+    ac.abort();
+    return;
+  }
+  doSend();
+}
+
+function onKeyDown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    if (ac) { ac.abort(); return; }
+    doSend();
+    return false;
+  }
+  return true;
+}
+
+function doSend() {
+  if (ac) return; // 正忙则忽略
+
+  var inp = $('userInput');
+  if (!inp) return;
+  var text = (inp.value||'').trim();
+  if (!text) return;
+
+  var key = getKey();
+  if (!key) { alert('请先设置 API Key！'); showApiModal(); return; }
+
+  if (ragOn && !selKBs.length) {
+    alert('请选择知识库或关闭 RAG');
+    return;
+  }
+
+  inp.value = '';
+  inp.style.height = 'auto';
+
+  if (ragOn) {
+    sendRAG(text, key);
+  } else {
+    sendNormal(text, key);
+  }
+}
+
+// ====== 普通发送 ======
+function sendNormal(text, key) {
+  // 标题
+  if (!msgs.length) {
+    convos[curConv].title = text.slice(0, 20) + (text.length > 20 ? '...' : '');
+  }
+
+  // 添加用户消息 + AI占位
+  msgs.push({ role:'user', content:text, _time:timeStr() });
+  var aiIdx = msgs.length - 1;
+  msgs.push({ role:'assistant', content:'', _streaming:true, _time:timeStr() });
+  aiIdx = msgs.length - 1;
+
+  ac = new AbortController();
+  setBusy(true);
+  renderChat();
+  updateBubble('', true);
+
+  var fullContent = '';
+
+  // 构建消息体
+  var apiMsgs = [];
+  for (var i = 0; i < msgs.length; i++) {
+    var m = msgs[i];
+    if (m.role === 'user' || !m._streaming) {
+      apiMsgs.push({ role: m.role, content: m.content });
+    }
+  }
+
+  // 发起请求
+  fetch(API, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + key,
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      messages: apiMsgs,
+      stream: true,
+      max_tokens: 4096,
+      temperature: 0.7,
+    }),
+    signal: ac.signal,
+  }).then(function(resp) {
+    if (!resp.ok) {
+      return resp.json().then(function(e) {
+        throw new Error((e.error && e.error.message) || ('HTTP ' + resp.status));
+      }, function() {
+        throw new Error('HTTP ' + resp.status);
+      });
+    }
+    return readSSE(resp, aiIdx);
+  }).then(function(full) {
+    fullContent = full;
+    doneNormal(aiIdx, fullContent);
+  }).catch(function(err) {
+    if (err.name === 'AbortError') {
+      if (!fullContent) fullContent = '_(已停止)_';
+    } else {
+      fullContent = '**出错了**\n\n' + err.message;
+    }
+    doneNormal(aiIdx, fullContent);
+  });
+}
+
+function doneNormal(aiIdx, content) {
+  var m = msgs[aiIdx];
+  if (m) {
+    delete m._streaming;
+    m.content = content || '_(空响应)_';
+  }
+  setBusy(false);
+  saveState();
+  renderChat();
+  $('userInput').focus();
+}
+
+// ====== RAG发送 ======
+function sendRAG(text, key) {
+  if (!msgs.length) {
+    convos[curConv].title = text.slice(0, 20) + (text.length > 20 ? '...' : '');
+  }
+
+  msgs.push({ role:'user', content:text, _time:timeStr() });
+  var aiIdx = msgs.length;
+  msgs.push({ role:'assistant', content:'', _streaming:true, _rag:true, _time:timeStr() });
+  aiIdx = msgs.length - 1;
+
+  ac = new AbortController();
+  setBusy(true);
+  renderChat();
+  updateBubble('', true);
+
+  var fullContent = '';
+  var relevance = null;
+
+  var hist = [];
+  for (var i = 0; i < msgs.length; i++) {
+    var m = msgs[i];
+    if (m.role === 'user' || (!m._streaming && m.role === 'assistant')) {
+      hist.push({ role: m.role, content: m.content });
+    }
+  }
+
+  fetch(BACKEND + '/api/chat/rag', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      question: text,
+      kb_ids: selKBs,
+      history: hist.slice(-20),
+      api_key: key,
+    }),
+    signal: ac.signal,
+  }).then(function(resp) {
+    if (!resp.ok) {
+      return resp.json().then(function(e) {
+        throw new Error(e.error || ('HTTP ' + resp.status));
+      }, function() {
+        throw new Error('HTTP ' + resp.status);
+      });
+    }
+    return readRAGSSE(resp, aiIdx);
+  }).then(function(result) {
+    fullContent = result.content;
+    relevance = result.relevance;
+    doneRAG(aiIdx, fullContent, relevance);
+  }).catch(function(err) {
+    if (err.name === 'AbortError') {
+      if (!fullContent) fullContent = '_(已停止)_';
+    } else {
+      fullContent = '**RAG 出错了**\n\n' + err.message + '\n\n请确认 Flask 后端已启动';
+    }
+    doneRAG(aiIdx, fullContent, null);
+  });
+}
+
+function doneRAG(aiIdx, content, relevance) {
+  var m = msgs[aiIdx];
+  if (m) {
+    delete m._streaming;
+    var final = content || '_(空响应)_';
+    if (relevance) {
+      final = buildRelCard(relevance) + '\n\n---\n\n' + final;
+    }
+    m.content = final;
+  }
+  setBusy(false);
+  saveState();
+  renderChat();
+  $('userInput').focus();
+}
+
+// ====== SSE流读取 ======
+function readSSE(resp, aiIdx) {
+  return new Promise(function(resolve, reject) {
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = '';
+    var full = '';
+
+    function next() {
+      reader.read().then(function(result) {
+        if (result.done) { resolve(full); return; }
+        buffer += decoder.decode(result.value, { stream: true });
+        var lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (!line || line.indexOf('data:') !== 0) continue;
+          var data = line.slice(5).trim();
+          if (data === '[DONE]') { resolve(full); return; }
+          try {
+            var p = JSON.parse(data);
+            var delta = ((p.choices||[])[0]||{}).delta||{};
+            if (delta.content) {
+              full += delta.content;
+              if (msgs[aiIdx]) { msgs[aiIdx].content = full; msgs[aiIdx]._streaming = true; }
+              updateBubble(full, true);
+            }
+          } catch(e) {}
+        }
+        next();
+      }).catch(reject);
+    }
+    next();
+  });
+}
+
+function readRAGSSE(resp, aiIdx) {
+  return new Promise(function(resolve, reject) {
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = '';
+    var full = '';
+    var rel = null;
+
+    function next() {
+      reader.read().then(function(result) {
+        if (result.done) { resolve({ content: full, relevance: rel }); return; }
+        buffer += decoder.decode(result.value, { stream: true });
+        var lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (!line || line.indexOf('data:') !== 0) continue;
+          var data = line.slice(5).trim();
+          if (data === '[DONE]') { resolve({ content: full, relevance: rel }); return; }
+          try {
+            var p = JSON.parse(data);
+            if (p.type === 'relevance') { rel = p; continue; }
+            if (p.error) { reject(new Error(p.error)); return; }
+            var delta = ((p.choices||[])[0]||{}).delta||{};
+            if (delta.content) {
+              full += delta.content;
+              if (msgs[aiIdx]) { msgs[aiIdx].content = full; msgs[aiIdx]._streaming = true; }
+              updateBubble(full, true);
+            }
+          } catch(e) {}
+        }
+        next();
+      }).catch(reject);
+    }
+    next();
+  });
+}
+
+// ====== 相关性卡片 ======
+function buildRelCard(d) {
+  var ov = d.overall_relevance || 0;
+  var c = ov >= 70 ? '#22c55e' : (ov >= 40 ? '#f59e0b' : '#ef4444');
+  var lv = ov >= 70 ? '高度相关' : (ov >= 40 ? '部分相关' : '相关性低');
+  var h = '';
+  if (d.top_matches) {
+    for (var i = 0; i < d.top_matches.length; i++) {
+      var m = d.top_matches[i];
+      var bc = m.relevance >= 70 ? '#22c55e' : (m.relevance >= 40 ? '#f59e0b' : '#ef4444');
+      h += '<div style="display:flex;align-items:center;gap:6px;margin:2px 0;font-size:10px">'
+        + '<span style="min-width:45px;color:#8b9fc0">'+esc(m.kb_name||'?')+'</span>'
+        + '<div style="flex:1;height:4px;background:#1e2d45;border-radius:2px;overflow:hidden">'
+        + '<div style="width:'+m.relevance+'%;height:100%;background:'+bc+';border-radius:2px"></div></div>'
+        + '<span style="min-width:30px;text-align:right;color:'+bc+';font-weight:600">'+m.relevance+'%</span></div>';
+    }
+  }
+  return '**知识库相关性检测**\n\n整体相关性: **'+ov+'%** ('+lv+')\n匹配数: '+((d.top_matches||[]).length)+' 条\n\n'+h;
+}
+
+// ============================================================
+// 输入
+// ============================================================
+function quickSend(el) {
+  var inp = $('userInput');
+  if (inp) { inp.value = (el.textContent||'').trim(); }
+  doSend();
+}
+function autoGrow(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 130) + 'px';
+}
+
+// ============================================================
+// 关闭弹窗
+// ============================================================
+function closeModal(id) { hideM(id); }
+document.addEventListener('click', function(e) {
+  if (e.target.id === 'apiModal') hideM('apiModal');
+  if (e.target.id === 'kbModal') hideM('kbModal');
+});
+
+// ============================================================
+// 初始化
+// ============================================================
+renderAll();
+loadKBs();
+updateKeyBtn();
+updateHint();
+$('userInput').focus();
+</script>
+</body>
+</html>

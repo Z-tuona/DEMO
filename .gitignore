@@ -1,0 +1,23 @@
+# 向量数据库（太大，每人自己生成）
+vector_db/
+
+# 上传的用户文档
+uploads/
+
+# SQLite 数据库
+*.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 临时文件
+*tmp*
+*_test_*
+_test_*
+*_temp_*
+
+# 系统文件
+desktop.ini
+Thumbs.db
