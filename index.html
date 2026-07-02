@@ -13,9 +13,12 @@ body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;background:#0b1120;c
 .side .btn-new{margin:10px 14px;padding:9px;background:#6366f1;color:#fff;border:none;border-radius:7px;cursor:pointer;font-size:13px}
 .side .btn-new:hover{background:#818cf8}
 .hist{overflow-y:auto;padding:6px;max-height:30vh}
-.hist .item{padding:9px 10px;border-radius:6px;cursor:pointer;font-size:12px;color:#8b9fc0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:1px}
+.hist .item{padding:9px 10px;border-radius:6px;cursor:pointer;font-size:12px;color:#8b9fc0;margin-bottom:1px;display:flex;align-items:center;gap:4px}
 .hist .item:hover{background:rgba(255,255,255,.04);color:#cbd5e1}
 .hist .item.on{background:rgba(99,102,241,.15);color:#818cf8}
+.hist .item .conv-del{display:none;font-size:14px;color:#ef4444;cursor:pointer;padding:0 4px;flex-shrink:0;line-height:1}
+.hist .item:hover .conv-del{display:block}
+.hist .item .conv-del:hover{color:#f87171}
 /* KB区 */
 .kb-sec{flex:1;overflow-y:auto;padding:6px;border-top:1px solid #1e2d45}
 .kb-hd{font-size:10px;color:#526380;padding:8px 6px;display:flex;justify-content:space-between;text-transform:uppercase;letter-spacing:1px}
@@ -262,39 +265,179 @@ function md(s) {
 }
 
 // ============================================================
-// 持久化
+// 持久化（localStorage 缓存 + 后端同步）
 // ============================================================
 function loadState() {
   try {
     var d = JSON.parse(localStorage.getItem('chat_v3'));
-    if (d) { msgs = d.msgs||[]; convos = d.convos||[]; curConv = d.curConv||0; }
+    if (d) { convos = d.convos||[]; curConv = d.curConv||0; }
   } catch(e) {}
-  if (!convos.length) { convos = [{title:'新对话', msgs:[]}]; curConv = 0; msgs = []; }
-  if (!convos[curConv]) { curConv = 0; msgs = convos[0] ? convos[0].msgs : []; }
+  if (!convos.length) { convos = [{title:'新对话', msgs:[], _id:null}]; curConv = 0; }
+  if (!convos[curConv]) { curConv = 0; }
+  // ★ 始终从 convos[curConv].msgs 取当前消息，不依赖全局 msgs
+  msgs = convos[curConv] ? (convos[curConv].msgs||[]) : [];
 }
 function saveState() {
   try {
     convos[curConv].msgs = msgs;
-    localStorage.setItem('chat_v3', JSON.stringify({msgs:msgs, convos:convos, curConv:curConv}));
+    // 更新标题（取第一条用户消息前20字）
+    var firstUser = null;
+    for (var i = 0; i < msgs.length; i++) {
+      if (msgs[i].role === 'user') { firstUser = msgs[i]; break; }
+    }
+    if (firstUser) {
+      var t = firstUser.content.slice(0, 20);
+      convos[curConv].title = t + (firstUser.content.length > 20 ? '...' : '');
+    }
+    localStorage.setItem('chat_v3', JSON.stringify({convos:convos, curConv:curConv}));
   } catch(e) {}
 }
 loadState();
+
+// ====== 后端对话同步 ======
+var _initPhase = true;  // 页面初始化阶段，防止后端数据覆盖用户操作
+
+function apiBackend(path, opts) {
+  opts = opts || {};
+  return fetch(BACKEND + path, {
+    method: opts.method || 'GET',
+    headers: Object.assign({'Content-Type': 'application/json'}, opts.headers||{}),
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  }).then(function(r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  });
+}
+
+// 从后端拉取对话列表，合并到 localStorage（仅在初始化阶段执行）
+function fetchConversations() {
+  return apiBackend('/api/conversations').then(function(list) {
+    if (!_initPhase) return;  // ★ 用户已开始交互，不覆盖
+    // 将后端数据合并到 convos（按 _id 匹配）
+    var merged = [];
+    var seen = {};
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      merged.push({
+        _id: c.id,
+        title: c.title,
+        msgs: (c.messages || []).map(function(m) {
+          return { role: m.role, content: m.content, _time: (m.created_at||'').slice(11,16) };
+        }),
+      });
+      seen[c.id] = true;
+    }
+    // 保留 localStorage 中尚未同步到后端的对话
+    for (var j = 0; j < convos.length; j++) {
+      var lc = convos[j];
+      if (!lc._id || !seen[lc._id]) {
+        if (lc.msgs && lc.msgs.length) merged.push(lc);
+      }
+    }
+    if (!merged.length) merged.push({title:'新对话', msgs:[], _id:null});
+    convos = merged;
+    if (curConv >= convos.length) curConv = 0;
+    msgs = convos[curConv] ? (convos[curConv].msgs||[]) : [];
+    saveState();
+    _initPhase = false;
+  }).catch(function() {
+    _initPhase = false;
+  });
+}
+
+// 同步单个对话到后端（全量替换消息）
+function syncConversation(idx) {
+  var c = convos[idx];
+  if (!c) return;
+  var cleanMsgs = (c.msgs||[]).map(function(m) {
+    return { role: m.role, content: m.content };
+  });
+
+  var promise;
+  if (c._id) {
+    // 已有后端 ID → 更新
+    promise = apiBackend('/api/conversations/' + c._id + '/messages', {
+      method: 'POST',
+      body: { messages: cleanMsgs },
+    });
+  } else {
+    // 新对话 → 先创建再同步
+    promise = apiBackend('/api/conversations', {
+      method: 'POST',
+      body: { title: c.title || '新对话' },
+    }).then(function(conv) {
+      c._id = conv.id;
+      saveState();
+      return apiBackend('/api/conversations/' + conv.id + '/messages', {
+        method: 'POST',
+        body: { messages: cleanMsgs },
+      });
+    });
+  }
+  return promise.catch(function() { /* 静默失败，localStorage 已保存 */ });
+}
+
+// 重命名对话
+function renameConversation(idx, newTitle) {
+  var c = convos[idx];
+  if (!c) return;
+  c.title = newTitle;
+  saveState();
+  if (c._id) {
+    apiBackend('/api/conversations/' + c._id, {
+      method: 'PUT',
+      body: { title: newTitle },
+    }).catch(function() {});
+  }
+  renderHist();
+}
+
+// 删除对话
+function deleteConversation(idx) {
+  if (convos.length <= 1) {
+    // 至少保留一个对话
+    convos = [{title:'新对话', msgs:[], _id:null}];
+    curConv = 0;
+    msgs = [];
+    saveState();
+    renderAll();
+    $('userInput').focus();
+    return;
+  }
+  var c = convos[idx];
+  if (c && c._id) {
+    apiBackend('/api/conversations/' + c._id, { method: 'DELETE' }).catch(function() {});
+  }
+  convos.splice(idx, 1);
+  if (curConv >= convos.length) curConv = convos.length - 1;
+  if (curConv < 0) curConv = 0;
+  msgs = convos[curConv] ? (convos[curConv].msgs||[]) : [];
+  saveState();
+  renderAll();
+  $('userInput').focus();
+}
 
 // ============================================================
 // 渲染
 // ============================================================
 function renderChat() {
   var box = $('chatBox');
-  var wel = $('welcome');
-  if (!box || !wel) return;
+  if (!box) return;
 
   if (!msgs.length) {
-    box.innerHTML = '';
-    box.appendChild(wel);
-    wel.style.display = '';
+    // ★ 不依赖可能已被移除的 DOM 节点，直接写 innerHTML
+    box.innerHTML = '<div class="welcome" id="welcome">'
+      + '<div style="font-size:42px">⚡</div>'
+      + '<h2>DeepSeek AI Chat</h2>'
+      + '<p>流式对话 · RAG 知识库检索 · Markdown 渲染</p>'
+      + '<div class="quick-bar">'
+      + '<span class="quick-item" onclick="quickSend(this)">Python有哪些Web框架？</span>'
+      + '<span class="quick-item" onclick="quickSend(this)">快速排序的复杂度？</span>'
+      + '<span class="quick-item" onclick="quickSend(this)">什么是Transformer？</span>'
+      + '<span class="quick-item" onclick="quickSend(this)">MySQL和MongoDB区别？</span>'
+      + '</div></div>';
     return;
   }
-  wel.style.display = 'none';
 
   var h = '';
   for (var i = 0; i < msgs.length; i++) {
@@ -335,8 +478,10 @@ function renderHist() {
   if (!el) return;
   var h = '';
   for (var i = 0; i < convos.length; i++) {
-    h += '<div class="item'+(i===curConv?' on':'')+'" onclick="switchChat('+i+')">'
-      + esc(convos[i].title||'新对话')+'</div>';
+    h += '<div class="item'+(i===curConv?' on':'')+'" onclick="switchChat('+i+')" oncontextmenu="event.preventDefault();showConvMenu(event,'+i+')">'
+      + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(convos[i].title||'新对话')+'</span>'
+      + '<span class="conv-del" onclick="event.stopPropagation();deleteConversation('+i+')" title="删除对话">×</span>'
+      + '</div>';
   }
   el.innerHTML = h;
 }
@@ -357,14 +502,42 @@ function renderAll() {
 function switchChat(i) {
   convos[curConv].msgs = msgs;
   curConv = i;
-  msgs = convos[i] ? (convos[i].msgs||[]) : [];
+  var c = convos[i];
+  if (!c) {
+    msgs = [];
+    saveState();
+    renderAll();
+    $('userInput').focus();
+    return;
+  }
+  // 如果后端有数据且 localStorage 没有消息，尝试从后端加载
+  if (c._id && (!c.msgs || !c.msgs.length)) {
+    apiBackend('/api/conversations/' + c._id).then(function(conv) {
+      if (conv && conv.messages) {
+        c.msgs = (conv.messages||[]).map(function(m) {
+          return { role: m.role, content: m.content, _time: (m.created_at||'').slice(11,16) };
+        });
+        c.title = conv.title || c.title;
+        if (curConv === i) {
+          msgs = c.msgs || [];
+          saveState();
+          renderAll();
+        }
+      }
+    }).catch(function() {
+      msgs = c.msgs || [];
+      saveState();
+      renderAll();
+    });
+  }
+  msgs = c.msgs || [];
   saveState();
   renderAll();
   $('userInput').focus();
 }
 function newChat() {
   convos[curConv].msgs = msgs;
-  convos.unshift({title:'新对话', msgs:[]});
+  convos.unshift({title:'新对话', msgs:[], _id:null});
   curConv = 0;
   msgs = [];
   saveState();
@@ -373,6 +546,15 @@ function newChat() {
 }
 function clearChat() {
   if (confirm('清空当前对话？')) { msgs = []; saveState(); renderAll(); }
+}
+function showConvMenu(e, i) {
+  var act = prompt('操作: 输入新名称重命名, 输入 del 删除, 取消则不操作\n当前名称: ' + (convos[i].title||'新对话'));
+  if (!act) return;
+  if (act.toLowerCase() === 'del' || act === '删除') {
+    if (confirm('确定删除「'+(convos[i].title||'新对话')+'」？')) deleteConversation(i);
+  } else {
+    renameConversation(i, act.trim());
+  }
 }
 
 // ============================================================
@@ -618,14 +800,17 @@ function isBusy() {
 
 function setBusy(b) {
   var btn = $('sendBtn');
-  if (!btn) return;
   if (b) {
-    btn.textContent = '■';
-    btn.classList.add('stop');
+    if (btn) {
+      btn.textContent = '■';
+      btn.classList.add('stop');
+    }
   } else {
-    btn.textContent = '▶';
-    btn.classList.remove('stop');
-    ac = null;
+    ac = null;                    // ← 先清 ac，确保后续 doSend 不被阻塞
+    if (btn) {
+      btn.textContent = '▶';
+      btn.classList.remove('stop');
+    }
   }
 }
 
@@ -651,6 +836,8 @@ function onKeyDown(e) {
 function doSend() {
   if (ac) return; // 正忙则忽略
 
+  _initPhase = false;  // ★ 用户已交互，取消后端数据覆盖
+
   var inp = $('userInput');
   if (!inp) return;
   var text = (inp.value||'').trim();
@@ -664,6 +851,7 @@ function doSend() {
     return;
   }
 
+  // ★ 在处理前先清空输入框，确保即使后续出错也不残留旧内容
   inp.value = '';
   inp.style.height = 'auto';
 
@@ -676,11 +864,6 @@ function doSend() {
 
 // ====== 普通发送 ======
 function sendNormal(text, key) {
-  // 标题
-  if (!msgs.length) {
-    convos[curConv].title = text.slice(0, 20) + (text.length > 20 ? '...' : '');
-  }
-
   // 添加用户消息 + AI占位
   msgs.push({ role:'user', content:text, _time:timeStr() });
   var aiIdx = msgs.length - 1;
@@ -748,16 +931,14 @@ function doneNormal(aiIdx, content) {
   }
   setBusy(false);
   saveState();
+  syncConversation(curConv);   // 异步同步到后端
   renderChat();
+  renderHist();                // 更新标题显示
   $('userInput').focus();
 }
 
 // ====== RAG发送 ======
 function sendRAG(text, key) {
-  if (!msgs.length) {
-    convos[curConv].title = text.slice(0, 20) + (text.length > 20 ? '...' : '');
-  }
-
   msgs.push({ role:'user', content:text, _time:timeStr() });
   var aiIdx = msgs.length;
   msgs.push({ role:'assistant', content:'', _streaming:true, _rag:true, _time:timeStr() });
@@ -824,7 +1005,9 @@ function doneRAG(aiIdx, content, relevance) {
   }
   setBusy(false);
   saveState();
+  syncConversation(curConv);   // 异步同步到后端
   renderChat();
+  renderHist();
   $('userInput').focus();
 }
 
@@ -953,6 +1136,10 @@ renderAll();
 loadKBs();
 updateKeyBtn();
 updateHint();
+// 从后端同步对话历史
+fetchConversations().then(function() {
+  renderAll();
+});
 $('userInput').focus();
 </script>
 </body>

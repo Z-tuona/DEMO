@@ -2,6 +2,8 @@
 SQLite 元数据库操作
 - knowledge_bases 表：知识库名称、描述、创建时间
 - documents 表：文档信息，外键关联知识库
+- conversations 表：对话会话
+- messages 表：对话消息，外键关联对话
 """
 import sqlite3
 import os
@@ -37,6 +39,20 @@ def init_db():
             chunk_count         INTEGER NOT NULL DEFAULT 0,
             created_at          TEXT    DEFAULT (datetime('now','localtime')),
             FOREIGN KEY (kb_id) REFERENCES knowledge_bases(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS conversations (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            title       TEXT    NOT NULL DEFAULT '新对话',
+            created_at  TEXT    DEFAULT (datetime('now','localtime')),
+            updated_at  TEXT    DEFAULT (datetime('now','localtime'))
+        );
+        CREATE TABLE IF NOT EXISTS messages (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL,
+            role            TEXT    NOT NULL CHECK(role IN ('user','assistant')),
+            content         TEXT    NOT NULL DEFAULT '',
+            created_at      TEXT    DEFAULT (datetime('now','localtime')),
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
     conn.commit()
@@ -139,6 +155,120 @@ def get_document(doc_id):
 def delete_document(doc_id):
     conn = get_conn()
     conn.execute('DELETE FROM documents WHERE id = ?', (doc_id,))
+    conn.commit()
+    conn.close()
+
+
+# ========== 对话 CRUD ==========
+def create_conversation(title='新对话'):
+    conn = get_conn()
+    cur = conn.execute(
+        'INSERT INTO conversations (title) VALUES (?)', (title,)
+    )
+    conv_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return get_conversation(conv_id)
+
+
+def get_conversation(conv_id):
+    conn = get_conn()
+    row = conn.execute(
+        'SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count '
+        'FROM conversations c WHERE c.id = ?', (conv_id,)
+    ).fetchone()
+    if row:
+        result = dict(row)
+        msgs = conn.execute(
+            'SELECT * FROM messages WHERE conversation_id = ? ORDER BY id ASC', (conv_id,)
+        ).fetchall()
+        result['messages'] = [dict(m) for m in msgs]
+        conn.close()
+        return result
+    conn.close()
+    return None
+
+
+def list_conversations():
+    conn = get_conn()
+    rows = conn.execute(
+        'SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count '
+        'FROM conversations c ORDER BY c.updated_at DESC'
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_conversation(conv_id, title=None):
+    conn = get_conn()
+    if title is not None:
+        conn.execute(
+            "UPDATE conversations SET title = ?, updated_at = datetime('now','localtime') WHERE id = ?",
+            (title, conv_id)
+        )
+    else:
+        conn.execute(
+            "UPDATE conversations SET updated_at = datetime('now','localtime') WHERE id = ?",
+            (conv_id,)
+        )
+    conn.commit()
+    conn.close()
+    return get_conversation(conv_id)
+
+
+def delete_conversation(conv_id):
+    conn = get_conn()
+    conn.execute('DELETE FROM conversations WHERE id = ?', (conv_id,))
+    conn.commit()
+    conn.close()
+
+
+def conversation_exists(conv_id):
+    conn = get_conn()
+    row = conn.execute('SELECT 1 FROM conversations WHERE id = ?', (conv_id,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+# ========== 消息 CRUD ==========
+def add_message(conv_id, role, content):
+    conn = get_conn()
+    cur = conn.execute(
+        'INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)',
+        (conv_id, role, content)
+    )
+    msg_id = cur.lastrowid
+    conn.execute(
+        "UPDATE conversations SET updated_at = datetime('now','localtime') WHERE id = ?",
+        (conv_id,)
+    )
+    conn.commit()
+    conn.close()
+    return msg_id
+
+
+def get_messages(conv_id):
+    conn = get_conn()
+    rows = conn.execute(
+        'SELECT * FROM messages WHERE conversation_id = ? ORDER BY id ASC', (conv_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def replace_all_messages(conv_id, messages):
+    """全量替换对话消息 — 先删后批量插入"""
+    conn = get_conn()
+    conn.execute('DELETE FROM messages WHERE conversation_id = ?', (conv_id,))
+    for msg in messages:
+        conn.execute(
+            'INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)',
+            (conv_id, msg.get('role', 'user'), msg.get('content', ''))
+        )
+    conn.execute(
+        "UPDATE conversations SET updated_at = datetime('now','localtime') WHERE id = ?",
+        (conv_id,)
+    )
     conn.commit()
     conn.close()
 

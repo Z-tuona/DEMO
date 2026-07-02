@@ -14,6 +14,9 @@ from config import (
 from database import (
     create_kb, get_kb, list_kbs, update_kb, delete_kb, get_kb_count,
     add_document, list_documents, get_document, delete_document,
+    create_conversation, get_conversation, list_conversations,
+    update_conversation, delete_conversation, conversation_exists,
+    add_message, get_messages, replace_all_messages,
 )
 from parser import parse_file, get_file_info
 from chunker import chunk_text
@@ -408,6 +411,63 @@ def get_config():
         'allowed_extensions': sorted(list(ALLOWED_EXTENSIONS)),
         'max_file_size_mb': MAX_FILE_SIZE / 1024 / 1024,
     })
+
+# ========== 对话管理 ==========
+@app.route('/api/conversations', methods=['GET', 'POST'])
+def handle_conversations():
+    if request.method == 'GET':
+        return jsonify(list_conversations())
+
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        title = data.get('title', '').strip() or '新对话'
+        conv = create_conversation(title)
+        return jsonify(conv), 201
+
+
+@app.route('/api/conversations/<int:conv_id>', methods=['GET', 'PUT', 'DELETE'])
+def handle_conversation(conv_id):
+    if not conversation_exists(conv_id):
+        return jsonify({'error': '对话不存在'}), 404
+
+    if request.method == 'GET':
+        return jsonify(get_conversation(conv_id))
+
+    if request.method == 'PUT':
+        data = request.get_json(silent=True) or {}
+        title = data.get('title', '').strip()
+        if not title:
+            return jsonify({'error': '标题不能为空'}), 400
+        conv = update_conversation(conv_id, title)
+        return jsonify(conv)
+
+    if request.method == 'DELETE':
+        delete_conversation(conv_id)
+        return jsonify({'success': True})
+
+
+@app.route('/api/conversations/<int:conv_id>/messages', methods=['GET', 'POST'])
+def handle_messages(conv_id):
+    if not conversation_exists(conv_id):
+        return jsonify({'error': '对话不存在'}), 404
+
+    if request.method == 'GET':
+        return jsonify(get_messages(conv_id))
+
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        messages = data.get('messages', [])
+        if not isinstance(messages, list):
+            return jsonify({'error': 'messages 必须是数组'}), 400
+        # 更新标题（取第一条用户消息的前20字）
+        first_user = next((m for m in messages if m.get('role') == 'user'), None)
+        if first_user:
+            text = first_user.get('content', '')
+            new_title = text[:20] + ('...' if len(text) > 20 else '')
+            update_conversation(conv_id, new_title)
+        replace_all_messages(conv_id, messages)
+        return jsonify({'success': True, 'message_count': len(messages)})
+
 
 # ========== 启动 ==========
 if __name__ == '__main__':
